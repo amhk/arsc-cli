@@ -1,0 +1,6 @@
+android_app {
+    name: "test-app",
+    min_sdk_version: "28",
+    sdk_version: "28",
+    installable: false,
+}

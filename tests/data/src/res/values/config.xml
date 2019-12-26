@@ -1,0 +1,5 @@
+<resources>
+    <bool name="foo">true</bool>
+    <string name="app_name">Test app</string>
+    <string name="foo">Foo</string>
+</resources>
