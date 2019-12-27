@@ -1,3 +1,5 @@
+mod endianness;
+
 #[cfg(test)]
 mod tests {
     #[test]
