@@ -1,6 +1,7 @@
 use crate::endianness::{LittleEndianU16, LittleEndianU32, LittleEndianU8};
 use num_enum::TryFromPrimitive;
-use std::fmt;
+use std::convert::TryFrom;
+use std::{fmt, mem};
 
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u16)]
@@ -23,6 +24,34 @@ pub enum ChunkType {
     Type = 0x0201,
     Spec = 0x0202,
     Library = 0x0203,
+}
+
+#[derive(Debug)]
+pub enum Chunk<'arsc> {
+    Table(&'arsc Table, &'arsc [u8]),
+    Package(&'arsc Package, &'arsc [u8]),
+    StringPool(&'arsc StringPool, &'arsc [u8]),
+    Spec(&'arsc Spec, &'arsc [u8]),
+    Type(&'arsc Type, &'arsc [u8]),
+    Error(String),
+}
+
+impl<'arsc> Chunk<'arsc> {
+    pub fn iter(&self) -> Option<ChunkIterator<'arsc>> {
+        match self {
+            Chunk::Table(table, bytes) => {
+                let inner = &bytes[table.header.header_size.value() as usize..];
+                Some(ChunkIterator::new(inner))
+            }
+            Chunk::Package(pkg, bytes) => {
+                let inner = &bytes[pkg.header.header_size.value() as usize..];
+                Some(ChunkIterator::new(inner))
+            }
+            Chunk::StringPool(_, _) | Chunk::Spec(_, _) | Chunk::Type(_, _) | Chunk::Error(_) => {
+                None
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -109,13 +138,162 @@ pub struct Type {
     pub config: Configuration,
 }
 
+#[derive(Debug)]
+pub struct ChunkIterator<'arsc> {
+    data: &'arsc [u8],
+    offset: usize,
+}
+
+impl<'arsc> ChunkIterator<'arsc> {
+    pub fn new(data: &'arsc [u8]) -> ChunkIterator<'arsc> {
+        ChunkIterator { data, offset: 0 }
+    }
+
+    fn invalidate(&mut self) {
+        self.offset = self.data.len();
+    }
+}
+
+impl<'arsc> Iterator for ChunkIterator<'arsc> {
+    type Item = Chunk<'arsc>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // check if iteration is already done
+        if self.offset >= self.data.len() {
+            return None;
+        }
+
+        // read header
+        let bytes_left = self.data.len() - self.offset;
+        if bytes_left < mem::size_of::<Header>() {
+            self.invalidate();
+            return Some(Chunk::Error(format!(
+                "{:#08x}: {} bytes left cannot contain header",
+                self.offset, bytes_left
+            )));
+        }
+        #[allow(clippy::transmute_ptr_to_ptr)]
+        let header: &Header = unsafe { mem::transmute(&self.data[self.offset]) };
+        let size = header.size.value() as usize;
+        if size < header.header_size.value().into() {
+            self.invalidate();
+            return Some(Chunk::Error(format!(
+                "{:#08x}: chunk size {} less than header size {}",
+                self.offset,
+                size,
+                header.header_size.value()
+            )));
+        }
+        if bytes_left < size {
+            self.invalidate();
+            return Some(Chunk::Error(format!(
+                "{:#08x}: {} bytes left cannot contain chunk of {} bytes",
+                self.offset, bytes_left, size
+            )));
+        }
+        let type_ = match ChunkType::try_from(header.type_.value()) {
+            Ok(t) => t,
+            Err(_) => {
+                self.invalidate();
+                return Some(Chunk::Error(format!(
+                    "{:#08x}: unknown chunk type {:#04x}",
+                    self.offset,
+                    header.type_.value()
+                )));
+            }
+        };
+
+        // advance to next chunk and return
+        let chunk = match type_ {
+            ChunkType::Table => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let table: &Table = unsafe { std::mem::transmute(&self.data[self.offset]) };
+                let bytes =
+                    &self.data[self.offset..self.offset + table.header.size.value() as usize];
+                Chunk::Table(table, bytes)
+            }
+            ChunkType::Package => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let pkg: &Package = unsafe { std::mem::transmute(&self.data[self.offset]) };
+                let bytes = &self.data[self.offset..self.offset + pkg.header.size.value() as usize];
+                Chunk::Package(pkg, bytes)
+            }
+            ChunkType::StringPool => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let sp: &StringPool = unsafe { std::mem::transmute(&self.data[self.offset]) };
+                let bytes = &self.data[self.offset..self.offset + sp.header.size.value() as usize];
+                Chunk::StringPool(sp, bytes)
+            }
+            ChunkType::Spec => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let spec: &Spec = unsafe { std::mem::transmute(&self.data[self.offset]) };
+                let bytes =
+                    &self.data[self.offset..self.offset + spec.header.size.value() as usize];
+                Chunk::Spec(spec, bytes)
+            }
+            ChunkType::Type => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let t: &Type = unsafe { std::mem::transmute(&self.data[self.offset]) };
+                let bytes = &self.data[self.offset..self.offset + t.header.size.value() as usize];
+                Chunk::Type(t, bytes)
+            }
+            _ => todo!("{:?}", type_), // Null, Xml* not handled yet
+        };
+        self.offset += size;
+        Some(chunk)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ChunkType;
+    use super::{Chunk, ChunkIterator, ChunkType};
     use std::convert::TryInto;
+
+    const RESOURCE_ARSC: &[u8] = include_bytes!("../../tests/data/unpacked/resources.arsc");
 
     #[test]
     fn chunk_type_from_primitive() {
         assert_eq!(0x0200u16.try_into(), Ok(ChunkType::Package));
+    }
+
+    #[test]
+    fn iter_valid_data() {
+        fn iterate(iter: ChunkIterator, depth: usize, out: &mut Vec<String>) {
+            for chunk in iter {
+                out.push(match chunk {
+                    Chunk::Table(_, _) => format!("{}-Table", depth),
+                    Chunk::Package(_, _) => format!("{}-Package", depth),
+                    Chunk::StringPool(_, _) => format!("{}-StringPool", depth),
+                    Chunk::Spec(_, _) => format!("{}-Spec", depth),
+                    Chunk::Type(_, _) => format!("{}-Type", depth),
+                    _ => "ERROR".to_owned(),
+                });
+                if let Some(child_iter) = chunk.iter() {
+                    iterate(child_iter, depth + 1, out);
+                }
+            }
+        }
+
+        let iter = ChunkIterator::new(RESOURCE_ARSC);
+        let mut v = Vec::new();
+        iterate(iter, 0, &mut v);
+        println!("{:#?}", v);
+        assert_eq!(
+            v,
+            [
+                "0-Table",
+                "1-StringPool",
+                "1-Package",
+                "2-StringPool",
+                "2-StringPool",
+                "2-Spec",
+                "2-Type",
+                "2-Spec",
+                "2-Type",
+                "2-Type",
+                "2-Type",
+                "2-Type",
+            ]
+        );
     }
 }
