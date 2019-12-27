@@ -1,3 +1,4 @@
+mod chunks;
 mod endianness;
 
 #[cfg(test)]
