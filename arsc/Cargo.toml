@@ -1,0 +1,8 @@
+[package]
+name = "arsc"
+version = "0.1.0"
+authors = ["Mårten Kongstad <marten.kongstad@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+num_enum = "0.4.2"
