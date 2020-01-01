@@ -2,11 +2,3 @@ pub mod chunks;
 mod endianness;
 
 pub use chunks::{Chunk, ChunkIterator};
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
