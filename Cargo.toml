@@ -17,3 +17,4 @@ members = [
 [dependencies]
 arsc = { version = "0.1.0", path = "arsc" }
 clap = "2.33.0"
+zip = "0.5.3"
