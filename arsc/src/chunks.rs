@@ -1,4 +1,5 @@
 use crate::endianness::{LittleEndianU16, LittleEndianU32, LittleEndianU8};
+use crate::error::Error;
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 use std::{fmt, mem};
@@ -46,6 +47,46 @@ impl<'arsc> Chunk<'arsc> {
                 Some(ChunkIterator::new(inner))
             }
             Chunk::StringPool(_) | Chunk::Spec(_) | Chunk::Type(_) | Chunk::Error(_) => None,
+        }
+    }
+
+    pub fn as_table(&self) -> Result<&'arsc Table, Error> {
+        match *self {
+            #[allow(clippy::transmute_ptr_to_ptr)]
+            Chunk::Table(bytes) => Ok(unsafe { mem::transmute(&bytes[0]) }),
+            _ => Err(Error::UnexpectedChunk),
+        }
+    }
+
+    pub fn as_package(&self) -> Result<&'arsc Package, Error> {
+        match *self {
+            #[allow(clippy::transmute_ptr_to_ptr)]
+            Chunk::Package(bytes) => Ok(unsafe { mem::transmute(&bytes[0]) }),
+            _ => Err(Error::UnexpectedChunk),
+        }
+    }
+
+    pub fn as_stringpool(&self) -> Result<&'arsc StringPool, Error> {
+        match *self {
+            #[allow(clippy::transmute_ptr_to_ptr)]
+            Chunk::StringPool(bytes) => Ok(unsafe { mem::transmute(&bytes[0]) }),
+            _ => Err(Error::UnexpectedChunk),
+        }
+    }
+
+    pub fn as_spec(&self) -> Result<&'arsc Spec, Error> {
+        match *self {
+            #[allow(clippy::transmute_ptr_to_ptr)]
+            Chunk::Spec(bytes) => Ok(unsafe { mem::transmute(&bytes[0]) }),
+            _ => Err(Error::UnexpectedChunk),
+        }
+    }
+
+    pub fn as_type(&self) -> Result<&'arsc Type, Error> {
+        match *self {
+            #[allow(clippy::transmute_ptr_to_ptr)]
+            Chunk::Type(bytes) => Ok(unsafe { mem::transmute(&bytes[0]) }),
+            _ => Err(Error::UnexpectedChunk),
         }
     }
 }
@@ -214,7 +255,7 @@ impl<'arsc> Iterator for ChunkIterator<'arsc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Chunk, ChunkIterator, ChunkType};
+    use super::{Chunk, ChunkIterator, ChunkType, Table};
     use std::convert::TryInto;
 
     const RESOURCE_ARSC: &[u8] = include_bytes!("../../tests/data/unpacked/resources.arsc");
@@ -263,5 +304,13 @@ mod tests {
                 "2-Type",
             ]
         );
+    }
+
+    #[test]
+    fn try_from_chunk_to_table() {
+        let mut iter = ChunkIterator::new(RESOURCE_ARSC);
+        let chunk = iter.next().unwrap();
+        let table: &Table = chunk.as_table().unwrap();
+        assert_eq!(table.package_count.value(), 1);
     }
 }

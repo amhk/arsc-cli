@@ -1,4 +1,7 @@
-pub mod chunks;
+mod chunks;
 mod endianness;
+mod error;
+mod table;
 
-pub use chunks::{Chunk, ChunkIterator, Package, Spec, StringPool, Table, Type};
+pub use error::Error;
+pub use table::Table;
