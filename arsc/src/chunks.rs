@@ -28,28 +28,24 @@ pub enum ChunkType {
 
 #[derive(Debug)]
 pub enum Chunk<'arsc> {
-    Table(&'arsc Table, &'arsc [u8]),
-    Package(&'arsc Package, &'arsc [u8]),
-    StringPool(&'arsc StringPool, &'arsc [u8]),
-    Spec(&'arsc Spec, &'arsc [u8]),
-    Type(&'arsc Type, &'arsc [u8]),
+    Table(&'arsc [u8]),
+    Package(&'arsc [u8]),
+    StringPool(&'arsc [u8]),
+    Spec(&'arsc [u8]),
+    Type(&'arsc [u8]),
     Error(String),
 }
 
 impl<'arsc> Chunk<'arsc> {
     pub fn iter(&self) -> Option<ChunkIterator<'arsc>> {
         match self {
-            Chunk::Table(table, bytes) => {
-                let inner = &bytes[table.header.header_size.value() as usize..];
+            Chunk::Table(bytes) | Chunk::Package(bytes) => {
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                let header: &Header = unsafe { mem::transmute(&bytes[0]) };
+                let inner = &bytes[header.header_size.value() as usize..];
                 Some(ChunkIterator::new(inner))
             }
-            Chunk::Package(pkg, bytes) => {
-                let inner = &bytes[pkg.header.header_size.value() as usize..];
-                Some(ChunkIterator::new(inner))
-            }
-            Chunk::StringPool(_, _) | Chunk::Spec(_, _) | Chunk::Type(_, _) | Chunk::Error(_) => {
-                None
-            }
+            Chunk::StringPool(_) | Chunk::Spec(_) | Chunk::Type(_) | Chunk::Error(_) => None,
         }
     }
 }
@@ -175,13 +171,12 @@ impl<'arsc> Iterator for ChunkIterator<'arsc> {
         #[allow(clippy::transmute_ptr_to_ptr)]
         let header: &Header = unsafe { mem::transmute(&self.data[self.offset]) };
         let size = header.size.value() as usize;
-        if size < header.header_size.value().into() {
+        let header_size = header.header_size.value() as usize;
+        if size < header_size {
             self.invalidate();
             return Some(Chunk::Error(format!(
                 "{:#08x}: chunk size {} less than header size {}",
-                self.offset,
-                size,
-                header.header_size.value()
+                self.offset, size, header_size
             )));
         }
         if bytes_left < size {
@@ -204,39 +199,13 @@ impl<'arsc> Iterator for ChunkIterator<'arsc> {
         };
 
         // advance to next chunk and return
+        let bytes = &self.data[self.offset..self.offset + size];
         let chunk = match type_ {
-            ChunkType::Table => {
-                #[allow(clippy::transmute_ptr_to_ptr)]
-                let table: &Table = unsafe { std::mem::transmute(&self.data[self.offset]) };
-                let bytes =
-                    &self.data[self.offset..self.offset + table.header.size.value() as usize];
-                Chunk::Table(table, bytes)
-            }
-            ChunkType::Package => {
-                #[allow(clippy::transmute_ptr_to_ptr)]
-                let pkg: &Package = unsafe { std::mem::transmute(&self.data[self.offset]) };
-                let bytes = &self.data[self.offset..self.offset + pkg.header.size.value() as usize];
-                Chunk::Package(pkg, bytes)
-            }
-            ChunkType::StringPool => {
-                #[allow(clippy::transmute_ptr_to_ptr)]
-                let sp: &StringPool = unsafe { std::mem::transmute(&self.data[self.offset]) };
-                let bytes = &self.data[self.offset..self.offset + sp.header.size.value() as usize];
-                Chunk::StringPool(sp, bytes)
-            }
-            ChunkType::Spec => {
-                #[allow(clippy::transmute_ptr_to_ptr)]
-                let spec: &Spec = unsafe { std::mem::transmute(&self.data[self.offset]) };
-                let bytes =
-                    &self.data[self.offset..self.offset + spec.header.size.value() as usize];
-                Chunk::Spec(spec, bytes)
-            }
-            ChunkType::Type => {
-                #[allow(clippy::transmute_ptr_to_ptr)]
-                let t: &Type = unsafe { std::mem::transmute(&self.data[self.offset]) };
-                let bytes = &self.data[self.offset..self.offset + t.header.size.value() as usize];
-                Chunk::Type(t, bytes)
-            }
+            ChunkType::Table => Chunk::Table(bytes),
+            ChunkType::Package => Chunk::Package(bytes),
+            ChunkType::StringPool => Chunk::StringPool(bytes),
+            ChunkType::Spec => Chunk::Spec(bytes),
+            ChunkType::Type => Chunk::Type(bytes),
             _ => todo!("{:?}", type_), // Null, Xml* not handled yet
         };
         self.offset += size;
@@ -261,11 +230,11 @@ mod tests {
         fn iterate(iter: ChunkIterator, depth: usize, out: &mut Vec<String>) {
             for chunk in iter {
                 out.push(match chunk {
-                    Chunk::Table(_, _) => format!("{}-Table", depth),
-                    Chunk::Package(_, _) => format!("{}-Package", depth),
-                    Chunk::StringPool(_, _) => format!("{}-StringPool", depth),
-                    Chunk::Spec(_, _) => format!("{}-Spec", depth),
-                    Chunk::Type(_, _) => format!("{}-Type", depth),
+                    Chunk::Table(_) => format!("{}-Table", depth),
+                    Chunk::Package(_) => format!("{}-Package", depth),
+                    Chunk::StringPool(_) => format!("{}-StringPool", depth),
+                    Chunk::Spec(_) => format!("{}-Spec", depth),
+                    Chunk::Type(_) => format!("{}-Type", depth),
                     _ => "ERROR".to_owned(),
                 });
                 if let Some(child_iter) = chunk.iter() {
