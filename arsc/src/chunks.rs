@@ -130,7 +130,7 @@ pub struct Type {
     pub flags: LittleEndianU8,
     _unused_padding16: LittleEndianU16,
     pub entry_count: LittleEndianU32,
-    pub entires_offset: LittleEndianU32,
+    pub entries_offset: LittleEndianU32,
     pub config: Configuration,
 }
 
