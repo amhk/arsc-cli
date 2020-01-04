@@ -1,14 +1,19 @@
-use crate::chunks::{Chunk, ChunkIterator};
+use crate::chunks::{
+    Chunk, ChunkIterator, ConfigurationFlags, Entry, KeyAndValue, MapEntry, Value,
+};
+use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
+use std::mem;
+use std::slice;
 
 // dummy struct (for now)
 struct StringPool {}
 struct Package {}
 
 pub struct Table<'bytes> {
-    bytes: &'bytes [u8],
-    value_strings: StringPool,
-    packages: Vec<Package>,
+    _bytes: &'bytes [u8],
+    _value_strings: StringPool,
+    _packages: Vec<Package>,
 }
 
 impl<'bytes> Table<'bytes> {
@@ -24,9 +29,9 @@ impl<'bytes> Table<'bytes> {
         }
         let (value_strings, packages) = Table::parse_table(&chunk)?;
         Ok(Table {
-            bytes,
-            value_strings,
-            packages,
+            _bytes: bytes,
+            _value_strings: value_strings,
+            _packages: packages,
         })
     }
 
@@ -79,23 +84,171 @@ impl<'bytes> Table<'bytes> {
     }
 
     fn parse_package(chunk: &'bytes Chunk) -> Result<Package, Error> {
-        // FIXME: implement this
-        let _details = chunk.as_package()?;
+        let details = chunk.as_package()?;
+        let mut type_strings: Option<StringPool> = None;
+        let mut name_strings: Option<StringPool> = None;
+
         let iter = chunk
             .iter()
             .ok_or_else(|| Error::CorruptData("cannot iterate over package".to_owned()))?;
         for child in iter {
             match child {
+                Chunk::StringPool(_bytes) => {
+                    let child_details = child.as_stringpool()?;
+
+                    let base_addr: usize = unsafe { mem::transmute(details) };
+                    let child_addr: usize = unsafe { mem::transmute(child_details) };
+                    let offset = child_addr - base_addr;
+
+                    if offset == details.types_string_buffer_offset.value() as usize {
+                        if type_strings.is_some() {
+                            return Err(Error::CorruptData(
+                                "multiple type string pools".to_owned(),
+                            ));
+                        }
+                        type_strings = Some(Table::parse_stringpool(&child)?);
+                    } else if offset == details.names_string_buffer_offset.value() as usize {
+                        if name_strings.is_some() {
+                            return Err(Error::CorruptData(
+                                "multiple name string pools".to_owned(),
+                            ));
+                        }
+                        name_strings = Some(Table::parse_stringpool(&child)?);
+                    } else {
+                        return Err(Error::CorruptData(
+                            "unexpected string pool in package".to_owned(),
+                        ));
+                    }
+                }
                 Chunk::Spec(_bytes) => {
-                    let _spec_details = child.as_spec()?;
+                    Table::parse_spec(&child)?;
                 }
                 Chunk::Type(_bytes) => {
-                    let _type_details = child.as_type()?;
+                    Table::parse_type(&child)?;
                 }
-                _ => {}
+                _ => return Err(Error::UnexpectedChunk),
             }
         }
+
+        if type_strings.is_none() {
+            return Err(Error::CorruptData(
+                "missing type string pool in package".to_owned(),
+            ));
+        }
+
+        if name_strings.is_none() {
+            return Err(Error::CorruptData(
+                "missing name string pool in package".to_owned(),
+            ));
+        }
+
+        let name = LittleEndianU16::decode_string(&details.name);
+        println!("package id={:#04x} name={:?}", details.id.value(), name);
+
         Ok(Package {})
+    }
+
+    fn parse_spec(chunk: &'bytes Chunk) -> Result<(), Error> {
+        let details = chunk.as_spec()?;
+        println!(
+            "spec id={:#04x} entry_count={}",
+            details.id.value(),
+            details.entry_count.value()
+        );
+
+        let addr: usize = unsafe { mem::transmute(details) };
+        let addr = addr + details.header.header_size.value() as usize;
+        let payload = unsafe {
+            slice::from_raw_parts(
+                addr as *const LittleEndianU32,
+                details.entry_count.value() as usize,
+            )
+        };
+
+        for le in payload.iter() {
+            match ConfigurationFlags::from_bits(le.value()) {
+                None => {
+                    return Err(Error::CorruptData(format!(
+                        "bad CONFIG_* bitmask {:#010x}",
+                        le.value()
+                    )))
+                }
+                Some(flags) => println!("    {:?}", flags),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn parse_type(chunk: &'bytes Chunk) -> Result<(), Error> {
+        let details = chunk.as_type()?;
+        if details.flags.value() & 0x01 != 0 {
+            unimplemented!("FLAG_SPARSE not supported yet");
+        }
+
+        println!(
+            "    type id={:#04x} flags={:#04x} entry_count={} config={:?}",
+            details.id.value(),
+            details.flags.value(),
+            details.entry_count.value(),
+            details.config
+        );
+
+        let addr: usize = unsafe { mem::transmute(details) };
+        let addr = addr + details.header.header_size.value() as usize;
+        let payload = unsafe {
+            slice::from_raw_parts(
+                addr as *const LittleEndianU32,
+                details.entry_count.value() as usize,
+            )
+        };
+        for (i, offset) in payload.iter().enumerate() {
+            println!("        entry={:#06x} offset={:#010x}", i, offset.value());
+            if offset.value() == 0xffff_ffff {
+                println!("            no entry");
+            } else {
+                let addr: usize = unsafe { mem::transmute(details) };
+                let addr = addr + details.entries_offset.value() as usize;
+                let addr = addr + offset.value() as usize;
+                let entry: &Entry = unsafe { mem::transmute(addr) };
+                println!("            key_index={:#010x}", entry.key_index.value());
+
+                if entry.flags.value() & 0x01 == 0 {
+                    let addr = addr + entry.size.value() as usize;
+                    let value: &Value = unsafe { mem::transmute(addr) };
+                    println!(
+                        "            type={:#04x} data={:#010x}",
+                        value.type_.value(),
+                        value.data.value()
+                    );
+                } else {
+                    let entry: &MapEntry = unsafe { mem::transmute(addr) };
+                    println!(
+                        "            map.parent_id={:#010x} map.count={}",
+                        entry.parent_id.value(),
+                        entry.count.value()
+                    );
+                    let addr = addr + entry.entry.size.value() as usize;
+                    let map: &[KeyAndValue] = unsafe {
+                        slice::from_raw_parts(
+                            addr as *const KeyAndValue,
+                            entry.count.value() as usize,
+                        )
+                    };
+                    for (i, pair) in map.iter().enumerate() {
+                        println!(
+                            "            map[{}]: key={:#010x} type={:#04x} data={:#010x}",
+                            i,
+                            pair.key.value(),
+                            pair.value.type_.value(),
+                            pair.value.data.value()
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -107,6 +260,6 @@ mod tests {
 
     #[test]
     fn parse_valid_table() {
-        let table = Table::parse(RESOURCE_ARSC).unwrap();
+        let _table = Table::parse(RESOURCE_ARSC).unwrap();
     }
 }

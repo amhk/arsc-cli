@@ -1,5 +1,6 @@
 use crate::endianness::{LittleEndianU16, LittleEndianU32, LittleEndianU8};
 use crate::error::Error;
+use bitflags::bitflags;
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 use std::{fmt, mem};
@@ -99,10 +100,9 @@ pub struct Header {
     pub size: LittleEndianU32,
 }
 
-#[derive(Debug)]
 #[repr(C)]
 pub struct Configuration {
-    size: LittleEndianU32,
+    size: LittleEndianU32, // size of a Configuration, always 0x40
     imsi: LittleEndianU32,
     locale: LittleEndianU32,
     screen_type: LittleEndianU32,
@@ -111,6 +111,73 @@ pub struct Configuration {
     version: LittleEndianU32,
     screen_config: LittleEndianU32,
     screen_size_dp: LittleEndianU32,
+}
+
+impl fmt::Debug for Configuration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut v = Vec::new();
+        if self.imsi.value() != 0 {
+            v.push(format!("imsi:{:#010x}", self.imsi.value()));
+        }
+        if self.locale.value() != 0 {
+            v.push(format!("locale:{:#010x}", self.locale.value()));
+        }
+        if self.screen_type.value() != 0 {
+            v.push(format!("screen_type:{:#010x}", self.screen_type.value()));
+        }
+        if self.input.value() != 0 {
+            v.push(format!("input:{:#010x}", self.input.value()));
+        }
+        if self.screen_size.value() != 0 {
+            v.push(format!("screen_size:{:#010x}", self.screen_size.value()));
+        }
+        if self.version.value() != 0 {
+            v.push(format!("version:{:#010x}", self.version.value()));
+        }
+        if self.screen_config.value() != 0 {
+            v.push(format!(
+                "screen_config:{:#010x}",
+                self.screen_config.value()
+            ));
+        }
+        if self.screen_size_dp.value() != 0 {
+            v.push(format!(
+                "screen_size_dp:{:#010x}",
+                self.screen_size_dp.value()
+            ));
+        }
+        if v.is_empty() {
+            write!(f, "-")
+        } else {
+            write!(f, "{}", v.join("-"))
+        }
+    }
+}
+
+bitflags! {
+    pub struct ConfigurationFlags: u32 {
+        // CONFIG_*
+        const MCC = 0x0000_0001;
+        const MNC = 0x0000_0002;
+        const LOCALE = 0x0000_0004;
+        const TOUCHSCREEN = 0x0000_0008;
+        const KEYBOARD = 0x0000_0010;
+        const KEYBOARD_HIDDEN = 0x0000_0020;
+        const NAVIGATION = 0x0000_0040;
+        const ORIENTATION = 0x0000_0080;
+        const DENSITY = 0x0000_0100;
+        const SCREEN_SIZE = 0x0000_0200;
+        const SMALLEST_SCREEN_SIZE = 0x0000_2000;
+        const VERSION = 0x0000_0400;
+        const SCREEN_LAYOUT = 0x0000_0800;
+        const UI_MODE = 0x0000_1000;
+        const LAYOUTDIR = 0x0000_4000;
+        const SCREEN_ROUND = 0x0000_8000;
+        const COLOR_MODE = 0x0001_0000;
+
+        // SPEC_PUBLIC
+        const PUBLIC = 0x4000_0000;
+    }
 }
 
 #[derive(Debug)]
@@ -172,6 +239,38 @@ pub struct Type {
     pub entry_count: LittleEndianU32,
     pub entries_offset: LittleEndianU32,
     pub config: Configuration,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct Entry {
+    pub size: LittleEndianU16,
+    pub flags: LittleEndianU16,
+    pub key_index: LittleEndianU32,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct MapEntry {
+    pub entry: Entry,
+    pub parent_id: LittleEndianU32,
+    pub count: LittleEndianU32,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct Value {
+    pub size: LittleEndianU16, // size of a Value, always 0x08
+    _unused_padding8: LittleEndianU8,
+    pub type_: LittleEndianU8,
+    pub data: LittleEndianU32,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct KeyAndValue {
+    pub key: LittleEndianU32,
+    pub value: Value,
 }
 
 #[derive(Debug)]
