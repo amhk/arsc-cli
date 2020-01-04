@@ -119,7 +119,6 @@ pub struct Spec {
     _unused_padding8: LittleEndianU8,
     _unused_padding16: LittleEndianU16,
     pub entry_count: LittleEndianU32,
-    pub flags: LittleEndianU32,
 }
 
 #[derive(Debug)]
