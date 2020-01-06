@@ -3,9 +3,10 @@ use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum Error {
+    BadIndex,
     CorruptData(String),
-    UnexpectedChunk,
     IoError(io::Error),
+    UnexpectedChunk,
 }
 
 impl fmt::Display for Error {

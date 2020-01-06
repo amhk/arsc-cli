@@ -3,19 +3,19 @@ use crate::chunks::{
 };
 use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
+use crate::stringpool::LoadedStringPool;
 use std::mem;
 use std::slice;
 
-// dummy struct (for now)
-struct LoadedStringPool {}
-
 struct LoadedPackage<'bytes> {
+    type_strings: LoadedStringPool<'bytes>,
+    name_strings: LoadedStringPool<'bytes>,
     _specs: Vec<&'bytes Spec>,
 }
 
 pub struct LoadedTable<'bytes> {
     _bytes: &'bytes [u8],
-    _value_strings: LoadedStringPool,
+    _value_strings: LoadedStringPool<'bytes>,
     _packages: Vec<LoadedPackage<'bytes>>,
 }
 
@@ -31,6 +31,7 @@ impl<'bytes> LoadedTable<'bytes> {
             return Err(Error::CorruptData("trailing data after table".to_owned()));
         }
         let (value_strings, packages) = LoadedTable::parse_table(chunk)?;
+
         Ok(LoadedTable {
             _bytes: bytes,
             _value_strings: value_strings,
@@ -83,9 +84,7 @@ impl<'bytes> LoadedTable<'bytes> {
     }
 
     fn parse_stringpool(chunk: Chunk<'bytes>) -> Result<LoadedStringPool, Error> {
-        // FIXME: implement this
-        let _details = chunk.as_stringpool()?;
-        Ok(LoadedStringPool {})
+        LoadedStringPool::from_chunk(chunk)
     }
 
     fn parse_package(chunk: Chunk<'bytes>) -> Result<LoadedPackage<'bytes>, Error> {
@@ -151,7 +150,11 @@ impl<'bytes> LoadedTable<'bytes> {
         let name = LittleEndianU16::decode_string(&details.name);
         println!("package id={:#04x} name={:?}", details.id.value(), name);
 
-        Ok(LoadedPackage { _specs: specs })
+        Ok(LoadedPackage {
+            type_strings: type_strings.unwrap(),
+            name_strings: name_strings.unwrap(),
+            _specs: specs,
+        })
     }
 
     fn parse_spec(chunk: Chunk<'bytes>) -> Result<&'bytes Spec, Error> {
@@ -261,15 +264,39 @@ impl<'bytes> LoadedTable<'bytes> {
 #[cfg(test)]
 mod tests {
     use super::LoadedTable;
+    use std::collections::HashSet;
 
     const RESOURCE_ARSC: &[u8] = include_bytes!("../../tests/data/unpacked/resources.arsc");
 
     #[test]
     fn parse_valid_table() {
-        let _table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
-        assert_eq!(_table._packages.len(), 1);
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        assert_eq!(table._packages.len(), 1);
 
-        let pkg = &_table._packages[0];
+        let pkg = &table._packages[0];
         assert_eq!(pkg._specs.len(), 2);
+
+        let actual = (0..table._value_strings.string_count())
+            .map(|i| table._value_strings.string_at(i).unwrap())
+            .collect::<HashSet<_>>();
+        assert!(actual.contains("Foo"));
+        assert!(actual.contains("Bar"));
+        assert!(actual.contains("Test app"));
+
+        let mut expected = HashSet::new();
+        expected.insert("bool".to_owned());
+        expected.insert("string".to_owned());
+        let actual = (0..pkg.type_strings.string_count())
+            .map(|i| pkg.type_strings.string_at(i).unwrap())
+            .collect::<HashSet<_>>();
+        assert_eq!(expected, actual);
+
+        let mut expected = HashSet::new();
+        expected.insert("app_name".to_owned());
+        expected.insert("foo".to_owned());
+        let actual = (0..pkg.name_strings.string_count())
+            .map(|i| pkg.name_strings.string_at(i).unwrap())
+            .collect::<HashSet<_>>();
+        assert_eq!(expected, actual);
     }
 }

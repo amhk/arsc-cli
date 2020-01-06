@@ -1,6 +1,7 @@
 mod chunks;
 mod endianness;
 mod error;
+mod stringpool;
 mod table;
 
 pub use error::Error;

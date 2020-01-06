@@ -221,6 +221,14 @@ pub struct StringPool {
 
 #[derive(Debug)]
 #[repr(C)]
+pub struct StringPoolSpan {
+    pub name: LittleEndianU32,
+    pub begin: LittleEndianU32,
+    pub end: LittleEndianU32,
+}
+
+#[derive(Debug)]
+#[repr(C)]
 pub struct Spec {
     pub header: Header,
     pub id: LittleEndianU8,
