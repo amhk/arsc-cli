@@ -1,5 +1,5 @@
 use crate::chunks::{
-    Chunk, ChunkIterator, ConfigurationFlags, Entry, KeyAndValue, MapEntry, Value,
+    Chunk, ChunkIterator, ConfigurationFlags, Entry, KeyAndValue, MapEntry, Spec, Value,
 };
 use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
@@ -8,16 +8,19 @@ use std::slice;
 
 // dummy struct (for now)
 struct StringPool {}
-struct Package {}
+
+struct Package<'bytes> {
+    _specs: Vec<&'bytes Spec>,
+}
 
 pub struct Table<'bytes> {
     _bytes: &'bytes [u8],
     _value_strings: StringPool,
-    _packages: Vec<Package>,
+    _packages: Vec<Package<'bytes>>,
 }
 
 impl<'bytes> Table<'bytes> {
-    pub fn parse(bytes: &[u8]) -> Result<Table, Error> {
+    pub fn parse(bytes: &'bytes [u8]) -> Result<Table<'bytes>, Error> {
         let mut iter = ChunkIterator::new(bytes);
         let chunk = match iter.next() {
             Some(Chunk::Table(b)) => Chunk::Table(b),
@@ -27,7 +30,7 @@ impl<'bytes> Table<'bytes> {
         if iter.next().is_some() {
             return Err(Error::CorruptData("trailing data after table".to_owned()));
         }
-        let (value_strings, packages) = Table::parse_table(&chunk)?;
+        let (value_strings, packages) = Table::parse_table(chunk)?;
         Ok(Table {
             _bytes: bytes,
             _value_strings: value_strings,
@@ -35,9 +38,9 @@ impl<'bytes> Table<'bytes> {
         })
     }
 
-    fn parse_table(chunk: &'bytes Chunk) -> Result<(StringPool, Vec<Package>), Error> {
+    fn parse_table(chunk: Chunk<'bytes>) -> Result<(StringPool, Vec<Package<'bytes>>), Error> {
         let details = chunk.as_table()?;
-        let mut packages = Vec::<Package>::new();
+        let mut packages = Vec::<Package<'bytes>>::new();
         let mut value_strings: Option<StringPool> = None;
 
         let iter = chunk
@@ -51,10 +54,10 @@ impl<'bytes> Table<'bytes> {
                             "muiltiple string pools in table".to_owned(),
                         ));
                     }
-                    value_strings = Some(Table::parse_stringpool(&child)?);
+                    value_strings = Some(Table::parse_stringpool(child)?);
                 }
                 Chunk::Package(_) => {
-                    packages.push(Table::parse_package(&child)?);
+                    packages.push(Table::parse_package(child)?);
                 }
                 _ => return Err(Error::UnexpectedChunk),
             }
@@ -77,16 +80,17 @@ impl<'bytes> Table<'bytes> {
         Ok((value_strings.unwrap(), packages))
     }
 
-    fn parse_stringpool(chunk: &'bytes Chunk) -> Result<StringPool, Error> {
+    fn parse_stringpool(chunk: Chunk<'bytes>) -> Result<StringPool, Error> {
         // FIXME: implement this
         let _details = chunk.as_stringpool()?;
         Ok(StringPool {})
     }
 
-    fn parse_package(chunk: &'bytes Chunk) -> Result<Package, Error> {
+    fn parse_package(chunk: Chunk<'bytes>) -> Result<Package<'bytes>, Error> {
         let details = chunk.as_package()?;
         let mut type_strings: Option<StringPool> = None;
         let mut name_strings: Option<StringPool> = None;
+        let mut specs: Vec<&'bytes Spec> = Vec::new();
 
         let iter = chunk
             .iter()
@@ -106,14 +110,14 @@ impl<'bytes> Table<'bytes> {
                                 "multiple type string pools".to_owned(),
                             ));
                         }
-                        type_strings = Some(Table::parse_stringpool(&child)?);
+                        type_strings = Some(Table::parse_stringpool(child)?);
                     } else if offset == details.names_string_buffer_offset.value() as usize {
                         if name_strings.is_some() {
                             return Err(Error::CorruptData(
                                 "multiple name string pools".to_owned(),
                             ));
                         }
-                        name_strings = Some(Table::parse_stringpool(&child)?);
+                        name_strings = Some(Table::parse_stringpool(child)?);
                     } else {
                         return Err(Error::CorruptData(
                             "unexpected string pool in package".to_owned(),
@@ -121,10 +125,10 @@ impl<'bytes> Table<'bytes> {
                     }
                 }
                 Chunk::Spec(_bytes) => {
-                    Table::parse_spec(&child)?;
+                    specs.push(Table::parse_spec(child)?);
                 }
                 Chunk::Type(_bytes) => {
-                    Table::parse_type(&child)?;
+                    Table::parse_type(child)?;
                 }
                 _ => return Err(Error::UnexpectedChunk),
             }
@@ -145,10 +149,10 @@ impl<'bytes> Table<'bytes> {
         let name = LittleEndianU16::decode_string(&details.name);
         println!("package id={:#04x} name={:?}", details.id.value(), name);
 
-        Ok(Package {})
+        Ok(Package { _specs: specs })
     }
 
-    fn parse_spec(chunk: &'bytes Chunk) -> Result<(), Error> {
+    fn parse_spec(chunk: Chunk<'bytes>) -> Result<&'bytes Spec, Error> {
         let details = chunk.as_spec()?;
         println!(
             "spec id={:#04x} entry_count={}",
@@ -177,10 +181,10 @@ impl<'bytes> Table<'bytes> {
             }
         }
 
-        Ok(())
+        Ok(details)
     }
 
-    fn parse_type(chunk: &'bytes Chunk) -> Result<(), Error> {
+    fn parse_type(chunk: Chunk<'bytes>) -> Result<(), Error> {
         let details = chunk.as_type()?;
         if details.flags.value() & 0x01 != 0 {
             unimplemented!("FLAG_SPARSE not supported yet");
@@ -261,5 +265,9 @@ mod tests {
     #[test]
     fn parse_valid_table() {
         let _table = Table::parse(RESOURCE_ARSC).unwrap();
+        assert_eq!(_table._packages.len(), 1);
+
+        let pkg = &_table._packages[0];
+        assert_eq!(pkg._specs.len(), 2);
     }
 }
