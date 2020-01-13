@@ -1,22 +1,46 @@
 use crate::chunks::{
-    Chunk, ChunkIterator, ConfigurationFlags, Entry, KeyAndValue, MapEntry, Spec, Value,
+    Chunk, ChunkIterator, Configuration, Entry, KeyAndValue, MapEntry, Spec, Value,
 };
 use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
 use crate::stringpool::LoadedStringPool;
+use std::collections::HashMap;
 use std::mem;
 use std::slice;
 
+#[derive(Debug, Clone)]
+enum LoadedValue<'bytes> {
+    Single(&'bytes Value),
+    Complex(&'bytes [KeyAndValue]),
+}
+
+#[derive(Debug, Clone)]
+struct ConfigAndValue<'bytes>(&'bytes Configuration, LoadedValue<'bytes>);
+
+#[derive(Debug)]
+struct LoadedEntry<'bytes> {
+    id: u16,
+    values: Vec<ConfigAndValue<'bytes>>,
+}
+
+#[derive(Debug)]
+struct LoadedType<'bytes> {
+    id: u8,
+    entries: Vec<LoadedEntry<'bytes>>,
+}
+
 struct LoadedPackage<'bytes> {
+    id: u8,
+    name: String,
     type_strings: LoadedStringPool<'bytes>,
     name_strings: LoadedStringPool<'bytes>,
-    _specs: Vec<&'bytes Spec>,
+    types: Vec<LoadedType<'bytes>>,
 }
 
 pub struct LoadedTable<'bytes> {
     _bytes: &'bytes [u8],
-    _value_strings: LoadedStringPool<'bytes>,
-    _packages: Vec<LoadedPackage<'bytes>>,
+    value_strings: LoadedStringPool<'bytes>,
+    packages: Vec<LoadedPackage<'bytes>>,
 }
 
 impl<'bytes> LoadedTable<'bytes> {
@@ -34,8 +58,8 @@ impl<'bytes> LoadedTable<'bytes> {
 
         Ok(LoadedTable {
             _bytes: bytes,
-            _value_strings: value_strings,
-            _packages: packages,
+            value_strings,
+            packages,
         })
     }
 
@@ -91,7 +115,7 @@ impl<'bytes> LoadedTable<'bytes> {
         let details = chunk.as_package()?;
         let mut type_strings: Option<LoadedStringPool> = None;
         let mut name_strings: Option<LoadedStringPool> = None;
-        let mut specs: Vec<&'bytes Spec> = Vec::new();
+        let mut types: HashMap<u8, Vec<Vec<Option<ConfigAndValue<'bytes>>>>> = HashMap::new();
 
         let iter = chunk
             .iter()
@@ -126,10 +150,13 @@ impl<'bytes> LoadedTable<'bytes> {
                     }
                 }
                 Chunk::Spec(_bytes) => {
-                    specs.push(LoadedTable::parse_spec(child)?);
+                    LoadedTable::parse_spec(child)?;
                 }
                 Chunk::Type(_bytes) => {
-                    LoadedTable::parse_type(child)?;
+                    let tt = child.as_type().unwrap().id.value() as u8;
+                    let values = LoadedTable::parse_type(child)?;
+                    types.entry(tt).or_default();
+                    types.entry(tt).and_modify(|e| e.push(values));
                 }
                 _ => return Err(Error::UnexpectedChunk),
             }
@@ -148,60 +175,54 @@ impl<'bytes> LoadedTable<'bytes> {
         }
 
         let name = LittleEndianU16::decode_string(&details.name);
-        println!("package id={:#04x} name={:?}", details.id.value(), name);
+
+        let mut loaded_types = Vec::new();
+        for (id, all_values) in types {
+            let size = all_values.first().unwrap().len();
+            let mut loaded_entries: Vec<LoadedEntry<'bytes>> = Vec::with_capacity(size);
+            for i in 0..size {
+                loaded_entries.push(LoadedEntry {
+                    id: i as u16,
+                    values: Vec::new(),
+                });
+            }
+
+            for values in all_values {
+                for (i, v) in values.iter().enumerate() {
+                    match v {
+                        Some(v) => loaded_entries[i].values.push(v.clone()),
+                        None => {}
+                    }
+                }
+            }
+
+            loaded_types.push(LoadedType {
+                id,
+                entries: loaded_entries,
+            });
+        }
 
         Ok(LoadedPackage {
+            id: details.id.value() as u8,
+            name,
             type_strings: type_strings.unwrap(),
             name_strings: name_strings.unwrap(),
-            _specs: specs,
+            types: loaded_types,
         })
     }
 
     fn parse_spec(chunk: Chunk<'bytes>) -> Result<&'bytes Spec, Error> {
         let details = chunk.as_spec()?;
-        println!(
-            "spec id={:#04x} entry_count={}",
-            details.id.value(),
-            details.entry_count.value()
-        );
-
-        let addr: usize = unsafe { mem::transmute(details) };
-        let addr = addr + details.header.header_size.value() as usize;
-        let payload = unsafe {
-            slice::from_raw_parts(
-                addr as *const LittleEndianU32,
-                details.entry_count.value() as usize,
-            )
-        };
-
-        for le in payload.iter() {
-            match ConfigurationFlags::from_bits(le.value()) {
-                None => {
-                    return Err(Error::CorruptData(format!(
-                        "bad CONFIG_* bitmask {:#010x}",
-                        le.value()
-                    )))
-                }
-                Some(flags) => println!("    {:?}", flags),
-            }
-        }
-
         Ok(details)
     }
 
-    fn parse_type(chunk: Chunk<'bytes>) -> Result<(), Error> {
+    fn parse_type(chunk: Chunk<'bytes>) -> Result<Vec<Option<ConfigAndValue<'bytes>>>, Error> {
+        let mut values = Vec::new();
         let details = chunk.as_type()?;
         if details.flags.value() & 0x01 != 0 {
             unimplemented!("FLAG_SPARSE not supported yet");
         }
-
-        println!(
-            "    type id={:#04x} flags={:#04x} entry_count={} config={:?}",
-            details.id.value(),
-            details.flags.value(),
-            details.entry_count.value(),
-            details.config
-        );
+        let config = &details.config;
 
         let addr: usize = unsafe { mem::transmute(details) };
         let addr = addr + details.header.header_size.value() as usize;
@@ -211,32 +232,21 @@ impl<'bytes> LoadedTable<'bytes> {
                 details.entry_count.value() as usize,
             )
         };
-        for (i, offset) in payload.iter().enumerate() {
-            println!("        entry={:#06x} offset={:#010x}", i, offset.value());
+        for offset in payload.iter() {
             if offset.value() == 0xffff_ffff {
-                println!("            no entry");
+                values.push(None);
             } else {
                 let addr: usize = unsafe { mem::transmute(details) };
                 let addr = addr + details.entries_offset.value() as usize;
                 let addr = addr + offset.value() as usize;
                 let entry: &Entry = unsafe { mem::transmute(addr) };
-                println!("            key_index={:#010x}", entry.key_index.value());
 
                 if entry.flags.value() & 0x01 == 0 {
                     let addr = addr + entry.size.value() as usize;
                     let value: &Value = unsafe { mem::transmute(addr) };
-                    println!(
-                        "            type={:#04x} data={:#010x}",
-                        value.type_.value(),
-                        value.data.value()
-                    );
+                    values.push(Some(ConfigAndValue(config, LoadedValue::Single(value))));
                 } else {
                     let entry: &MapEntry = unsafe { mem::transmute(addr) };
-                    println!(
-                        "            map.parent_id={:#010x} map.count={}",
-                        entry.parent_id.value(),
-                        entry.count.value()
-                    );
                     let addr = addr + entry.entry.size.value() as usize;
                     let map: &[KeyAndValue] = unsafe {
                         slice::from_raw_parts(
@@ -244,20 +254,11 @@ impl<'bytes> LoadedTable<'bytes> {
                             entry.count.value() as usize,
                         )
                     };
-                    for (i, pair) in map.iter().enumerate() {
-                        println!(
-                            "            map[{}]: key={:#010x} type={:#04x} data={:#010x}",
-                            i,
-                            pair.key.value(),
-                            pair.value.type_.value(),
-                            pair.value.data.value()
-                        );
-                    }
+                    values.push(Some(ConfigAndValue(config, LoadedValue::Complex(map))));
                 }
             }
         }
-
-        Ok(())
+        Ok(values)
     }
 }
 
@@ -271,17 +272,19 @@ mod tests {
     #[test]
     fn parse_valid_table() {
         let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
-        assert_eq!(table._packages.len(), 1);
+        assert_eq!(table.packages.len(), 1);
 
-        let pkg = &table._packages[0];
-        assert_eq!(pkg._specs.len(), 2);
-
-        let actual = (0..table._value_strings.string_count())
-            .map(|i| table._value_strings.string_at(i).unwrap())
+        let actual = (0..table.value_strings.string_count())
+            .map(|i| table.value_strings.string_at(i).unwrap())
             .collect::<HashSet<_>>();
         assert!(actual.contains("Foo"));
         assert!(actual.contains("Bar"));
         assert!(actual.contains("Test app"));
+
+        let pkg = &table.packages[0];
+        assert_eq!(pkg.id, 0x7f);
+        assert_eq!(pkg.name, "test.app".to_owned());
+        assert_eq!(pkg.types.len(), 2);
 
         let mut expected = HashSet::new();
         expected.insert("bool".to_owned());
