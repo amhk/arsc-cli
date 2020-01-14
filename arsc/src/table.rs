@@ -3,6 +3,7 @@ use crate::chunks::{
 };
 use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
+use crate::resources::ResourceId;
 use crate::stringpool::LoadedStringPool;
 use std::collections::HashMap;
 use std::mem;
@@ -64,6 +65,10 @@ impl<'bytes> LoadedTable<'bytes> {
             value_strings,
             packages,
         })
+    }
+
+    pub fn resid_iter(&self) -> ResourceIdIterator {
+        ResourceIdIterator::new(&self)
     }
 
     fn parse_table(
@@ -268,9 +273,74 @@ impl<'bytes> LoadedTable<'bytes> {
     }
 }
 
+pub struct ResourceIdIterator<'a> {
+    iters: Vec<LoadedEntryIterator<'a>>,
+    current: Option<LoadedEntryIterator<'a>>,
+}
+
+impl<'a> ResourceIdIterator<'a> {
+    pub fn new(table: &'a LoadedTable) -> ResourceIdIterator<'a> {
+        let mut iters = Vec::new();
+        for pkg in &table.packages {
+            for type_ in &pkg.types {
+                iters.push(LoadedEntryIterator {
+                    package_id: pkg.id,
+                    type_id: type_.id,
+                    entries: type_.entries.iter(),
+                });
+            }
+        }
+        iters.reverse(); // items will be popped later: this ensures lowest numbers first
+        ResourceIdIterator {
+            iters,
+            current: None,
+        }
+    }
+}
+
+impl<'a> Iterator for ResourceIdIterator<'a> {
+    type Item = ResourceId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current {
+            Some(ref mut iter) => match iter.next() {
+                Some(resid) => Some(resid),
+                None => {
+                    self.current = None;
+                    self.next()
+                }
+            },
+            None => match self.iters.pop() {
+                Some(iter) => {
+                    self.current = Some(iter);
+                    self.next()
+                }
+                None => None,
+            },
+        }
+    }
+}
+
+struct LoadedEntryIterator<'a> {
+    package_id: u8,
+    type_id: u8,
+    entries: slice::Iter<'a, LoadedEntry<'a>>,
+}
+
+impl<'a> Iterator for LoadedEntryIterator<'a> {
+    type Item = ResourceId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.entries
+            .next()
+            .map(|entry| ResourceId::from_parts(self.package_id, self.type_id, entry.id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LoadedTable;
+    use super::{LoadedPackage, LoadedTable};
+    use crate::ResourceId;
     use std::collections::HashSet;
 
     const RESOURCE_ARSC: &[u8] = include_bytes!("../../tests/data/unpacked/resources.arsc");
@@ -306,6 +376,72 @@ mod tests {
         let actual = (0..pkg.name_strings.string_count())
             .map(|i| pkg.name_strings.string_at(i).unwrap())
             .collect::<HashSet<_>>();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resid_iter() {
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let expected = vec![0x7f010000, 0x7f020000, 0x7f020001];
+        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resid_iter_empty_table() {
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let table = LoadedTable {
+            packages: Vec::new(),
+            ..table
+        };
+        assert_eq!(0, table.resid_iter().count());
+    }
+
+    #[test]
+    fn resid_iter_empty_package() {
+        let mut table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let pkg = LoadedPackage {
+            types: Vec::new(),
+            ..table.packages.pop().unwrap()
+        };
+        let table = LoadedTable {
+            packages: vec![pkg],
+            ..table
+        };
+        assert_eq!(0, table.resid_iter().count());
+    }
+
+    #[test]
+    fn resid_iter_empty_type() {
+        let mut table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let mut pkg = table.packages.pop().unwrap();
+        pkg.types[0].entries.clear();
+        let table = LoadedTable {
+            packages: vec![pkg],
+            ..table
+        };
+        let expected = vec![0x7f020000, 0x7f020001];
+        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resid_iter_two_packages() {
+        let mut system_table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let system_pkg = LoadedPackage {
+            id: 0x01,
+            ..system_table.packages.pop().unwrap()
+        };
+        let mut table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let app_pkg = table.packages.pop().unwrap();
+        let table = LoadedTable {
+            packages: vec![system_pkg, app_pkg],
+            ..table
+        };
+        let expected = vec![
+            0x01010000, 0x01020000, 0x01020001, 0x7f010000, 0x7f020000, 0x7f020001,
+        ];
+        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
         assert_eq!(expected, actual);
     }
 }
