@@ -180,7 +180,10 @@ impl<'bytes> LoadedTable<'bytes> {
         let name = LittleEndianU16::decode_string(&details.name);
 
         let mut loaded_types = Vec::new();
-        for (id, all_values) in types {
+        let mut sorted_ids = types.keys().copied().collect::<Vec<_>>();
+        sorted_ids.sort_unstable();
+        for id in sorted_ids {
+            let all_values = types.get(&id).unwrap();
             let size = all_values.first().unwrap().len();
             let mut loaded_entries: Vec<LoadedEntry<'bytes>> = Vec::with_capacity(size);
             for i in 0..size {
