@@ -11,8 +11,8 @@ use std::slice;
 
 #[derive(Debug, Clone)]
 enum LoadedValue<'bytes> {
-    Single(&'bytes Value),
-    Complex(&'bytes [KeyAndValue]),
+    Single(&'bytes Entry, &'bytes Value),
+    Complex(&'bytes MapEntry, &'bytes [KeyAndValue]),
 }
 
 #[derive(Debug, Clone)]
@@ -21,12 +21,14 @@ struct ConfigAndValue<'bytes>(&'bytes Configuration, LoadedValue<'bytes>);
 #[derive(Debug)]
 struct LoadedEntry<'bytes> {
     id: u16,
+    name: String,
     values: Vec<ConfigAndValue<'bytes>>,
 }
 
 #[derive(Debug)]
 struct LoadedType<'bytes> {
     id: u8,
+    name: String,
     entries: Vec<LoadedEntry<'bytes>>,
 }
 
@@ -69,6 +71,18 @@ impl<'bytes> LoadedTable<'bytes> {
 
     pub fn resid_iter(&self) -> ResourceIdIterator {
         ResourceIdIterator::new(&self)
+    }
+
+    pub fn resid_for_name(
+        &self,
+        package_name: &str,
+        type_name: &str,
+        entry_name: &str,
+    ) -> Option<ResourceId> {
+        let p = self.packages.iter().find(|p| p.name == package_name)?;
+        let t = p.types.iter().find(|t| t.name == type_name)?;
+        let e = t.entries.iter().find(|e| e.name == entry_name)?;
+        Some(ResourceId::from_parts(p.id, t.id, e.id))
     }
 
     fn parse_table(
@@ -170,17 +184,23 @@ impl<'bytes> LoadedTable<'bytes> {
             }
         }
 
-        if type_strings.is_none() {
-            return Err(Error::CorruptData(
-                "missing type string pool in package".to_owned(),
-            ));
-        }
+        let type_strings = match type_strings {
+            Some(s) => s,
+            None => {
+                return Err(Error::CorruptData(
+                    "missing type string pool in package".to_owned(),
+                ))
+            }
+        };
 
-        if name_strings.is_none() {
-            return Err(Error::CorruptData(
-                "missing name string pool in package".to_owned(),
-            ));
-        }
+        let name_strings = match name_strings {
+            Some(s) => s,
+            None => {
+                return Err(Error::CorruptData(
+                    "missing name string pool in package".to_owned(),
+                ))
+            }
+        };
 
         let name = LittleEndianU16::decode_string(&details.name);
 
@@ -190,34 +210,52 @@ impl<'bytes> LoadedTable<'bytes> {
         for id in sorted_ids {
             let all_values = types.get(&id).unwrap();
             let size = all_values.first().unwrap().len();
-            let mut loaded_entries: Vec<LoadedEntry<'bytes>> = Vec::with_capacity(size);
-            for i in 0..size {
-                loaded_entries.push(LoadedEntry {
-                    id: i as u16,
-                    values: Vec::new(),
-                });
-            }
-
+            let mut config_and_values: Vec<Vec<ConfigAndValue<'bytes>>> = Vec::new();
+            config_and_values.resize_with(size, Vec::new);
             for values in all_values {
                 for (i, v) in values.iter().enumerate() {
                     match v {
-                        Some(v) => loaded_entries[i].values.push(v.clone()),
+                        Some(v) => config_and_values[i].push(v.clone()),
                         None => {}
                     }
                 }
             }
 
+            let mut entries: Vec<LoadedEntry<'bytes>> = Vec::with_capacity(config_and_values.len());
+            while !config_and_values.is_empty() {
+                let values = config_and_values.pop().unwrap();
+                if values.is_empty() {
+                    continue;
+                }
+                let name = match values.first().unwrap().1 {
+                    LoadedValue::Single(entry, _) => name_strings
+                        .string_at(entry.key_index.value() as usize)
+                        .unwrap(),
+                    LoadedValue::Complex(map_entry, _) => name_strings
+                        .string_at(map_entry.entry.key_index.value() as usize)
+                        .unwrap(),
+                };
+                entries.push(LoadedEntry {
+                    id: config_and_values.len() as u16,
+                    name,
+                    values,
+                });
+            }
+            entries.sort_unstable_by_key(|entry| entry.id);
+
+            debug_assert!(id > 0);
             loaded_types.push(LoadedType {
                 id,
-                entries: loaded_entries,
+                name: type_strings.string_at((id - 1) as usize)?,
+                entries,
             });
         }
 
         Ok(LoadedPackage {
             id: details.id.value() as u8,
             name,
-            type_strings: type_strings.unwrap(),
-            name_strings: name_strings.unwrap(),
+            type_strings,
+            name_strings,
             types: loaded_types,
         })
     }
@@ -255,7 +293,10 @@ impl<'bytes> LoadedTable<'bytes> {
                 if entry.flags.value() & 0x01 == 0 {
                     let addr = addr + entry.size.value() as usize;
                     let value: &Value = unsafe { mem::transmute(addr) };
-                    values.push(Some(ConfigAndValue(config, LoadedValue::Single(value))));
+                    values.push(Some(ConfigAndValue(
+                        config,
+                        LoadedValue::Single(entry, value),
+                    )));
                 } else {
                     let entry: &MapEntry = unsafe { mem::transmute(addr) };
                     let addr = addr + entry.entry.size.value() as usize;
@@ -265,7 +306,10 @@ impl<'bytes> LoadedTable<'bytes> {
                             entry.count.value() as usize,
                         )
                     };
-                    values.push(Some(ConfigAndValue(config, LoadedValue::Complex(map))));
+                    values.push(Some(ConfigAndValue(
+                        config,
+                        LoadedValue::Complex(entry, map),
+                    )));
                 }
             }
         }
@@ -443,5 +487,31 @@ mod tests {
         ];
         let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resid_for_name() {
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        assert_eq!(
+            table
+                .resid_for_name("test.app", "bool", "foo")
+                .map(|resid| resid.id),
+            Some(0x7f010000)
+        );
+        assert_eq!(
+            table
+                .resid_for_name("test.app", "string", "app_name")
+                .map(|resid| resid.id),
+            Some(0x7f020000)
+        );
+        assert_eq!(
+            table
+                .resid_for_name("test.app", "string", "foo")
+                .map(|resid| resid.id),
+            Some(0x7f020001)
+        );
+        assert!(table.resid_for_name("-", "string", "foo").is_none());
+        assert!(table.resid_for_name("test.app", "-", "foo").is_none());
+        assert!(table.resid_for_name("test.app", "string", "-").is_none());
     }
 }

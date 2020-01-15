@@ -35,4 +35,8 @@ fn main() {
     for resid in table.resid_iter() {
         println!("resid={:?}", resid);
     }
+    println!(
+        "resid_for_name={:?}",
+        table.resid_for_name("test.app", "bool", "foo")
+    );
 }
