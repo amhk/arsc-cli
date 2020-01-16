@@ -33,7 +33,8 @@ fn main() {
     // parse resource table
     let table = Table::parse(buf).unwrap();
     for resid in table.resid_iter() {
-        println!("resid={:?}", resid);
+        let name = table.name_for_resid(&resid).unwrap();
+        println!("{:?} {:?}", resid, name);
     }
     println!(
         "resid_for_name={:?}",

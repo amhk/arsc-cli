@@ -85,6 +85,13 @@ impl<'bytes> LoadedTable<'bytes> {
         Some(ResourceId::from_parts(p.id, t.id, e.id))
     }
 
+    pub fn name_for_resid(&self, resid: &ResourceId) -> Option<(String, String, String)> {
+        let p = self.packages.iter().find(|p| p.id == resid.package_id())?;
+        let t = p.types.iter().find(|t| t.id == resid.type_id())?;
+        let e = t.entries.iter().find(|e| e.id == resid.entry_id())?;
+        Some((p.name.clone(), t.name.clone(), e.name.clone()))
+    }
+
     fn parse_table(
         chunk: Chunk<'bytes>,
     ) -> Result<(LoadedStringPool, Vec<LoadedPackage<'bytes>>), Error> {
@@ -513,5 +520,14 @@ mod tests {
         assert!(table.resid_for_name("-", "string", "foo").is_none());
         assert!(table.resid_for_name("test.app", "-", "foo").is_none());
         assert!(table.resid_for_name("test.app", "string", "-").is_none());
+    }
+
+    #[test]
+    fn name_for_resid() {
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        assert_eq!(
+            table.name_for_resid(&ResourceId::from_parts(0x7f, 0x01, 0x0000)),
+            Some(("test.app".to_owned(), "bool".to_owned(), "foo".to_owned()))
+        );
     }
 }
