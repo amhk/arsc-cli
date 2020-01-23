@@ -32,13 +32,16 @@ struct LoadedType<'bytes> {
 struct LoadedPackage<'bytes> {
     id: u8,
     name: String,
+    #[allow(dead_code)]
     type_strings: LoadedStringPool<'bytes>,
+    #[allow(dead_code)]
     name_strings: LoadedStringPool<'bytes>,
     types: Vec<LoadedType<'bytes>>,
 }
 
 pub struct LoadedTable<'bytes> {
     _bytes: &'bytes [u8],
+    #[allow(dead_code)]
     value_strings: LoadedStringPool<'bytes>,
     packages: Vec<LoadedPackage<'bytes>>,
 }
