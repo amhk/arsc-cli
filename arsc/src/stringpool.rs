@@ -88,6 +88,7 @@ impl<'bytes> LoadedStringPool<'bytes> {
         })
     }
 
+    #[allow(dead_code)]
     pub fn string_count(&self) -> usize {
         self.string_count
     }
@@ -102,10 +103,12 @@ impl<'bytes> LoadedStringPool<'bytes> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn style_count(&self) -> usize {
         self.style_count
     }
 
+    #[allow(dead_code)]
     pub fn style_at(&self, i: usize) -> Result<Vec<LoadedStringPoolSpan>, Error> {
         if i >= self.style_count {
             return Err(Error::BadIndex);

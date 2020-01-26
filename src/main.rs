@@ -31,5 +31,13 @@ fn main() {
     let buf = &mmap[begin..end];
 
     // parse resource table
-    let _table = Table::parse(buf).unwrap();
+    let table = Table::parse(buf).unwrap();
+    for resid in table.resid_iter() {
+        let name = table.name_for_resid(&resid).unwrap();
+        println!("{:?} {:?}", resid, name);
+    }
+    println!(
+        "resid_for_name={:?}",
+        table.resid_for_name("test.app", "bool", "foo")
+    );
 }
