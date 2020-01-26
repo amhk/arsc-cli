@@ -434,7 +434,10 @@ mod tests {
     fn resid_iter() {
         let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
         let expected = vec![0x7f010000, 0x7f020000, 0x7f020001];
-        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
+        let actual: Vec<u32> = table
+            .resid_iter()
+            .map(|resid| resid.into())
+            .collect::<Vec<_>>();
         assert_eq!(expected, actual);
     }
 
@@ -472,7 +475,10 @@ mod tests {
             ..table
         };
         let expected = vec![0x7f020000, 0x7f020001];
-        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
+        let actual: Vec<u32> = table
+            .resid_iter()
+            .map(|resid| resid.into())
+            .collect::<Vec<_>>();
         assert_eq!(expected, actual);
     }
 
@@ -492,7 +498,10 @@ mod tests {
         let expected = vec![
             0x01010000, 0x01020000, 0x01020001, 0x7f010000, 0x7f020000, 0x7f020001,
         ];
-        let actual = table.resid_iter().map(|resid| resid.id).collect::<Vec<_>>();
+        let actual: Vec<u32> = table
+            .resid_iter()
+            .map(|resid| resid.into())
+            .collect::<Vec<_>>();
         assert_eq!(expected, actual);
     }
 
@@ -502,19 +511,19 @@ mod tests {
         assert_eq!(
             table
                 .resid_for_name("test.app", "bool", "foo")
-                .map(|resid| resid.id),
+                .map(|resid| resid.into()),
             Some(0x7f010000)
         );
         assert_eq!(
             table
                 .resid_for_name("test.app", "string", "app_name")
-                .map(|resid| resid.id),
+                .map(|resid| resid.into()),
             Some(0x7f020000)
         );
         assert_eq!(
             table
                 .resid_for_name("test.app", "string", "foo")
-                .map(|resid| resid.id),
+                .map(|resid| resid.into()),
             Some(0x7f020001)
         );
         assert!(table.resid_for_name("-", "string", "foo").is_none());

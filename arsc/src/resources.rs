@@ -1,7 +1,13 @@
-use std::fmt;
+use std::{convert, fmt};
 
 pub struct ResourceId {
-    pub id: u32,
+    id: u32,
+}
+
+impl convert::From<ResourceId> for u32 {
+    fn from(resid: ResourceId) -> Self {
+        resid.id
+    }
 }
 
 impl ResourceId {
