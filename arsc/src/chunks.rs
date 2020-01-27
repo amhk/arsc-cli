@@ -103,14 +103,14 @@ pub struct Header {
 #[repr(C)]
 pub struct Configuration {
     size: LittleEndianU32, // size of a Configuration, always 0x40
-    imsi: LittleEndianU32,
-    locale: LittleEndianU32,
-    screen_type: LittleEndianU32,
-    input: LittleEndianU32,
-    screen_size: LittleEndianU32,
-    version: LittleEndianU32,
-    screen_config: LittleEndianU32,
-    screen_size_dp: LittleEndianU32,
+    pub imsi: LittleEndianU32,
+    pub locale: LittleEndianU32,
+    pub screen_type: LittleEndianU32,
+    pub input: LittleEndianU32,
+    pub screen_size: LittleEndianU32,
+    pub version: LittleEndianU32,
+    pub screen_config: LittleEndianU32,
+    pub screen_size_dp: LittleEndianU32,
 }
 
 impl fmt::Debug for Configuration {
