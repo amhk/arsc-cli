@@ -28,6 +28,27 @@ pub enum ChunkType {
     Library = 0x0203,
 }
 
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum ValueType {
+    Null = 0x00,
+    Reference = 0x01,
+    Attribute = 0x02,
+    String = 0x03,
+    Float = 0x04,
+    Dimension = 0x05,
+    Fraction = 0x06,
+    DynamicReference = 0x07,
+    DynamicAttribute = 0x08,
+    IntDec = 0x10,
+    IntHex = 0x11,
+    IntBoolean = 0x12,
+    IntColorArgb8 = 0x1c,
+    IntColorRgb8 = 0x1d,
+    IntColorArgb4 = 0x1e,
+    IntColorRgb4 = 0x1f,
+}
+
 #[derive(Debug)]
 pub enum Chunk<'arsc> {
     Table(&'arsc [u8]),
