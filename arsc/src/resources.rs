@@ -17,6 +17,10 @@ impl ResourceId {
         }
     }
 
+    pub(crate) fn from_u32(id: u32) -> ResourceId {
+        ResourceId { id }
+    }
+
     pub fn package_id(&self) -> u8 {
         ((self.id & 0xff00_0000) >> 24) as u8
     }
@@ -44,11 +48,12 @@ mod tests {
     fn from_parts() {
         let resid = ResourceId::from_parts(0x7f, 0x02, 0x0001);
         assert_eq!(resid.id, 0x07f020001);
+        assert_eq!(resid.id, ResourceId::from_u32(0x07f020001).id);
     }
 
     #[test]
     fn parts() {
-        let resid = ResourceId::from_parts(0x7f, 0x02, 0x0001);
+        let resid = ResourceId::from_u32(0x7f020001);
         assert_eq!(resid.package_id(), 0x7f);
         assert_eq!(resid.type_id(), 0x02);
         assert_eq!(resid.entry_id(), 0x0001);

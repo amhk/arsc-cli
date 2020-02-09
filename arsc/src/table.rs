@@ -535,7 +535,7 @@ mod tests {
     fn name_for_resid() {
         let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
         assert_eq!(
-            table.name_for_resid(&ResourceId::from_parts(0x7f, 0x01, 0x0000)),
+            table.name_for_resid(&ResourceId::from_u32(0x7f010000)),
             Some(("test.app".to_owned(), "bool".to_owned(), "foo".to_owned()))
         );
     }
