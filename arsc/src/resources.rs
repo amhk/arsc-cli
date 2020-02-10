@@ -17,6 +17,10 @@ impl ResourceId {
         }
     }
 
+    pub(crate) fn from_u32(id: u32) -> ResourceId {
+        ResourceId { id }
+    }
+
     pub fn package_id(&self) -> u8 {
         ((self.id & 0xff00_0000) >> 24) as u8
     }
@@ -36,6 +40,50 @@ impl fmt::Debug for ResourceId {
     }
 }
 
+#[derive(Debug)]
+pub enum ResourceValue {
+    Null,
+    Reference(ResourceId),
+    Attribute(ResourceId),
+    String(String),
+    Float(f32),
+    Dimension(f32),
+    Fraction(f32),
+    IntDec(i32),
+    IntHex(i32),
+    Boolean(bool),
+    ColorArgb8(f32, f32, f32, f32),
+    ColorRgb8(f32, f32, f32),
+    ColorArgb4(f32, f32, f32, f32),
+    ColorRgb4(f32, f32, f32),
+    Array(Vec<(ResourceId, ResourceValue)>),
+}
+
+pub struct ResourceConfiguration {
+    #[allow(dead_code)]
+    pub imsi: u32,
+    #[allow(dead_code)]
+    pub locale: u32,
+    #[allow(dead_code)]
+    pub screen_type: u32,
+    #[allow(dead_code)]
+    pub input: u32,
+    #[allow(dead_code)]
+    pub screen_size: u32,
+    #[allow(dead_code)]
+    pub version: u32,
+    #[allow(dead_code)]
+    pub screen_config: u32,
+    #[allow(dead_code)]
+    pub screen_size_dp: u32,
+}
+
+impl fmt::Debug for ResourceConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ResourceConfiguration {{ TODO(#10) }}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ResourceId;
@@ -44,11 +92,12 @@ mod tests {
     fn from_parts() {
         let resid = ResourceId::from_parts(0x7f, 0x02, 0x0001);
         assert_eq!(resid.id, 0x07f020001);
+        assert_eq!(resid.id, ResourceId::from_u32(0x07f020001).id);
     }
 
     #[test]
     fn parts() {
-        let resid = ResourceId::from_parts(0x7f, 0x02, 0x0001);
+        let resid = ResourceId::from_u32(0x7f020001);
         assert_eq!(resid.package_id(), 0x7f);
         assert_eq!(resid.type_id(), 0x02);
         assert_eq!(resid.entry_id(), 0x0001);

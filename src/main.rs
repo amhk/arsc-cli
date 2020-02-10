@@ -35,6 +35,9 @@ fn main() {
     for resid in table.resid_iter() {
         let name = table.name_for_resid(&resid).unwrap();
         println!("{:?} {:?}", resid, name);
+        for (cfg, v) in table.lookup_all(&resid).unwrap() {
+            println!("    {:?} {:?}", cfg, v);
+        }
     }
     println!(
         "resid_for_name={:?}",

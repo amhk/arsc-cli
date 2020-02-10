@@ -1,16 +1,17 @@
 use crate::chunks::{
-    Chunk, ChunkIterator, Configuration, Entry, KeyAndValue, MapEntry, Spec, Value,
+    Chunk, ChunkIterator, Configuration, Entry, KeyAndValue, MapEntry, Spec, Value, ValueType,
 };
 use crate::endianness::{LittleEndianU16, LittleEndianU32};
 use crate::error::Error;
-use crate::resources::ResourceId;
+use crate::resources::{ResourceConfiguration, ResourceId, ResourceValue};
 use crate::stringpool::LoadedStringPool;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::mem;
 use std::slice;
 
 #[derive(Debug, Clone)]
-enum LoadedValue<'bytes> {
+pub enum LoadedValue<'bytes> {
     Single(&'bytes Entry, &'bytes Value),
     Complex(&'bytes MapEntry, &'bytes [KeyAndValue]),
 }
@@ -90,6 +91,106 @@ impl<'bytes> LoadedTable<'bytes> {
         let t = p.types.iter().find(|t| t.id == resid.type_id())?;
         let e = t.entries.iter().find(|e| e.id == resid.entry_id())?;
         Some((p.name.clone(), t.name.clone(), e.name.clone()))
+    }
+
+    pub fn lookup_all(
+        &self,
+        resid: &ResourceId,
+    ) -> Option<Vec<(ResourceConfiguration, ResourceValue)>> {
+        let p = self.packages.iter().find(|p| p.id == resid.package_id())?;
+        let t = p.types.iter().find(|t| t.id == resid.type_id())?;
+        let e = t.entries.iter().find(|e| e.id == resid.entry_id())?;
+        let mut values = Vec::new();
+        for config_and_value in &e.values {
+            values.push((
+                self.chunk_config_to_res_config(&config_and_value.0),
+                self.loaded_value_to_res_value(&config_and_value.1).ok()?,
+            ));
+        }
+        Some(values)
+    }
+
+    fn chunk_config_to_res_config(&self, chunk: &Configuration) -> ResourceConfiguration {
+        ResourceConfiguration {
+            imsi: chunk.imsi.value(),
+            locale: chunk.locale.value(),
+            screen_type: chunk.screen_type.value(),
+            input: chunk.input.value(),
+            screen_size: chunk.screen_size.value(),
+            version: chunk.version.value(),
+            screen_config: chunk.screen_config.value(),
+            screen_size_dp: chunk.screen_size_dp.value(),
+        }
+    }
+
+    fn loaded_value_to_res_value(&self, value: &LoadedValue) -> Result<ResourceValue, Error> {
+        match value {
+            LoadedValue::Single(_, chunk) => self.chunk_value_to_res_value(&chunk),
+            LoadedValue::Complex(_, map) => {
+                let mut v = Vec::with_capacity(map.len());
+                for key_and_value in map.iter() {
+                    let key = key_and_value.key.value();
+                    let pp = ((key & 0xff00_0000) >> 24) as u8;
+                    let tt = ((key & 0x00ff_0000) >> 16) as u8 + 1; // type encoded as (n - 1)
+                    let eeee = (key & 0x0000_ffff) as u16;
+                    let resid = ResourceId::from_parts(pp, tt, eeee);
+
+                    let value = self.chunk_value_to_res_value(&key_and_value.value)?;
+
+                    v.push((resid, value));
+                }
+                Ok(ResourceValue::Array(v))
+            }
+        }
+    }
+
+    fn chunk_value_to_res_value(&self, chunk: &Value) -> Result<ResourceValue, Error> {
+        let type_: ValueType = chunk.type_.value().try_into().map_err(|_| {
+            Error::CorruptData(format!("bad chunk type {:#04x}", chunk.type_.value()))
+        })?;
+        let value = chunk.data.value();
+        match type_ {
+            ValueType::Null => Ok(ResourceValue::Null),
+            ValueType::Reference => Ok(ResourceValue::Reference(ResourceId::from_u32(value))),
+            ValueType::Attribute => Ok(ResourceValue::Attribute(ResourceId::from_u32(value))),
+            ValueType::String => {
+                let index = value as usize;
+                Ok(ResourceValue::String(self.value_strings.string_at(index)?))
+            }
+            ValueType::Float => Ok(ResourceValue::Float(f32::from_bits(value))),
+            ValueType::Dimension => {
+                // TODO(#11): correctly decode dimension value, see TypedValue.java
+                Ok(ResourceValue::Float(0_f32))
+            }
+            ValueType::Fraction => {
+                // TODO(#12): correctly decode fraction, see TypedValue.java
+                Ok(ResourceValue::Float(0_f32))
+            }
+            ValueType::DynamicReference | ValueType::DynamicAttribute => {
+                // the dynamic types are never encoded into the ARSC; they're only used to rewrite
+                // values during lookup
+                Err(Error::UnexpectedChunk)
+            }
+            ValueType::IntDec => Ok(ResourceValue::IntDec(value as i32)),
+            ValueType::IntHex => Ok(ResourceValue::IntHex(value as i32)),
+            ValueType::IntBoolean => Ok(ResourceValue::Boolean(value == 0xffff_ffff)),
+            ValueType::IntColorArgb8 => {
+                // TODO(#13): correctly decode color
+                Ok(ResourceValue::ColorArgb8(0_f32, 0_f32, 0_f32, 0_f32))
+            }
+            ValueType::IntColorRgb8 => {
+                // TODO(#13): correctly decode color
+                Ok(ResourceValue::ColorRgb8(0_f32, 0_f32, 0_f32))
+            }
+            ValueType::IntColorArgb4 => {
+                // TODO(#13): correctly decode color
+                Ok(ResourceValue::ColorArgb4(0_f32, 0_f32, 0_f32, 0_f32))
+            }
+            ValueType::IntColorRgb4 => {
+                // TODO(#13): correctly decode color
+                Ok(ResourceValue::ColorRgb4(0_f32, 0_f32, 0_f32))
+            }
+        }
     }
 
     fn parse_table(
@@ -535,8 +636,16 @@ mod tests {
     fn name_for_resid() {
         let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
         assert_eq!(
-            table.name_for_resid(&ResourceId::from_parts(0x7f, 0x01, 0x0000)),
+            table.name_for_resid(&ResourceId::from_u32(0x7f010000)),
             Some(("test.app".to_owned(), "bool".to_owned(), "foo".to_owned()))
         );
+    }
+
+    #[test]
+    fn lookup_all() {
+        let table = LoadedTable::parse(RESOURCE_ARSC).unwrap();
+        let resid = ResourceId::from_u32(0x7f020001); // string/foo
+        let values = table.lookup_all(&resid).expect("lookup succeeded");
+        assert_eq!(values.len(), 4); // -, sv, en-rXA, ar-rXB
     }
 }
